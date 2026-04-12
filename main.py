@@ -642,6 +642,20 @@ FOOD_DATABASE = [
     {"name": "пицца", "aliases": ["пицца"], "kcal": 266, "p": 11, "f": 10, "c": 33, "default_g": 250},
     {"name": "бургер", "aliases": ["бургер"], "kcal": 295, "p": 17, "f": 14, "c": 24, "default_g": 220},
     {"name": "шаурма", "aliases": ["шаурма"], "kcal": 220, "p": 10, "f": 9, "c": 24, "default_g": 300},
+    {"name": "фарш", "aliases": ["фарш"], "kcal": 240, "p": 16, "f": 18, "c": 0, "default_g": 150},
+    {"name": "котлета", "aliases": ["котлета", "котлеты"], "kcal": 250, "p": 14, "f": 18, "c": 8, "default_g": 100, "piece_g": 90},
+    {"name": "суп", "aliases": ["суп", "борщ"], "kcal": 55, "p": 2.5, "f": 2.5, "c": 6, "default_g": 300},
+    {"name": "плов", "aliases": ["плов"], "kcal": 180, "p": 5, "f": 7, "c": 24, "default_g": 250},
+    {"name": "пельмени", "aliases": ["пельмени"], "kcal": 275, "p": 11, "f": 12, "c": 29, "default_g": 200},
+    {"name": "вареники", "aliases": ["вареники"], "kcal": 210, "p": 6, "f": 5, "c": 36, "default_g": 200},
+    {"name": "колбаса", "aliases": ["колбаса"], "kcal": 300, "p": 13, "f": 27, "c": 2, "default_g": 50},
+    {"name": "сосиски", "aliases": ["сосиски", "сосиска"], "kcal": 270, "p": 11, "f": 24, "c": 2, "default_g": 100, "piece_g": 50},
+    {"name": "лаваш", "aliases": ["лаваш"], "kcal": 260, "p": 8, "f": 1.5, "c": 55, "default_g": 70},
+    {"name": "майонез", "aliases": ["майонез"], "kcal": 620, "p": 1, "f": 67, "c": 3, "default_g": 15},
+    {"name": "кетчуп", "aliases": ["кетчуп"], "kcal": 110, "p": 1.3, "f": 0.2, "c": 25, "default_g": 15},
+    {"name": "сахар", "aliases": ["сахар"], "kcal": 398, "p": 0, "f": 0, "c": 99.8, "default_g": 5},
+    {"name": "чай", "aliases": ["чай"], "kcal": 1, "p": 0, "f": 0, "c": 0, "default_g": 250},
+    {"name": "кофе", "aliases": ["кофе"], "kcal": 2, "p": 0.2, "f": 0, "c": 0.3, "default_g": 200},
 ]
 
 RECIPE_LIBRARY = [
@@ -896,22 +910,54 @@ def calculate_targets(profile: dict) -> dict:
     bmr = calculate_bmr(age, sex, weight, height)
     maintain = int(bmr * activity_multiplier(activity))
 
+    is_female = "жен" in sex.lower()
+    min_cut_calories = 1500 if is_female else 1700
+    min_fat = 50 if is_female else 55
+
     if goal == "Безопасное снижение веса":
-        calories = max(1400, maintain - 300)
+        activity_value = activity.lower()
+        if "низ" in activity_value:
+            deficit_percent = 0.15
+        elif "выс" in activity_value:
+            deficit_percent = 0.18
+        else:
+            deficit_percent = 0.17
+
+        deficit = int(maintain * deficit_percent)
+        deficit = max(300, min(deficit, 700))
+        calories = maintain - deficit
+        calories = max(min_cut_calories, calories)
+
         protein = round(weight * 1.8)
-        fat = round(weight * 0.8)
+        fat = max(min_fat, round(weight * 0.9))
     elif goal == "Набор массы":
         calories = maintain + 250
         protein = round(weight * 1.8)
-        fat = round(weight * 1.0)
+        fat = max(min_fat, round(weight * 1.0))
     else:
         calories = maintain
         protein = round(weight * 1.6)
-        fat = round(weight * 0.9)
+        fat = max(min_fat, round(weight * 0.9))
 
-    carbs = max(80, round((calories - protein * 4 - fat * 9) / 4))
+    carbs = round((calories - protein * 4 - fat * 9) / 4)
+    carbs = max(100, carbs)
+
+    if protein * 4 + fat * 9 + carbs * 4 > calories + 80:
+        carbs = max(100, round((calories - protein * 4 - fat * 9) / 4))
+        if carbs < 100:
+            carbs = 100
+            fat = max(min_fat, round((calories - protein * 4 - carbs * 4) / 9))
+
     water = estimate_water_goal(profile)
-    return {"calories": int(calories), "protein": int(protein), "fat": int(fat), "carbs": int(carbs), "water": int(water)}
+    return {
+        "calories": int(calories),
+        "protein": int(protein),
+        "fat": int(fat),
+        "carbs": int(carbs),
+        "water": int(water),
+        "bmr": int(bmr),
+        "maintain": int(maintain),
+    }
 
 
 def bmi_value(profile: dict) -> Optional[float]:
@@ -931,64 +977,138 @@ def normalize_food_text(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower().replace("ё", "е")).strip()
 
 
-def _extract_amount(segment: str, item: dict) -> float:
-    number_match = re.search(r"(\d+(?:[\.,]\d+)?)\s*(кг|г|гр|грамм|грамма|мл|л|шт|штуки|штук)?", segment)
-    if not number_match:
-        return float(item.get("default_g", 100))
-    raw_value = float(number_match.group(1).replace(",", "."))
-    unit = (number_match.group(2) or "").lower()
-    if unit == "кг":
-        return raw_value * 1000
-    if unit == "л":
-        return raw_value * 1000
-    if unit in {"г", "гр", "грамм", "грамма", "мл"}:
-        return raw_value
-    if unit in {"шт", "штуки", "штук"}:
-        return raw_value * float(item.get("piece_g", item.get("default_g", 100)))
-    if item.get("piece_g") and raw_value <= 10:
-        return raw_value * float(item.get("piece_g", item.get("default_g", 100)))
-    return raw_value
+def _normalize_unit(unit: str) -> str:
+    unit = (unit or "").lower().strip().replace(".", "")
+    if unit == "гр":
+        return "г"
+    return unit
+
+
+def _extract_amount_from_segment(segment: str, item: dict) -> tuple[float, str]:
+    """Возвращает (граммы, source), где source = exact / inferred / default."""
+    s = normalize_food_text(segment)
+
+    match = re.search(r"(\d+(?:[\.,]\d+)?)\s*(кг|г|гр|грамм|грамма|граммов|мл|л|шт|штука|штуки|штук)\b", s)
+    if match:
+        value = float(match.group(1).replace(",", "."))
+        unit = _normalize_unit(match.group(2))
+
+        if unit == "кг":
+            return value * 1000, "exact"
+        if unit == "л":
+            return value * 1000, "exact"
+        if unit in {"г", "грамм", "грамма", "граммов", "мл"}:
+            return value, "exact"
+        if unit in {"шт", "штука", "штуки", "штук"}:
+            piece_g = float(item.get("piece_g", item.get("default_g", 100)))
+            return value * piece_g, "exact"
+
+    piece_match = re.search(r"(\d+(?:[\.,]\d+)?)\s+([а-яa-z]+)", s)
+    if piece_match and item.get("piece_g"):
+        value = float(piece_match.group(1).replace(",", "."))
+        word = piece_match.group(2)
+        if any(alias in word or word in alias for alias in item.get("aliases", [])):
+            return value * float(item["piece_g"]), "inferred"
+
+    if any(x in s for x in ["полпачки", "половина пачки"]):
+        return float(item.get("default_g", 100)) / 2, "inferred"
+    if "пачка" in s:
+        return float(item.get("default_g", 100)), "inferred"
+
+    if "масло" in item["name"]:
+        spoon_match = re.search(r"(\d+(?:[\.,]\d+)?)\s*(ст\.?\s*л|столовая ложка|столовые ложки)", s)
+        if spoon_match:
+            spoons = float(spoon_match.group(1).replace(",", "."))
+            return spoons * 14, "inferred"
+        tea_match = re.search(r"(\d+(?:[\.,]\d+)?)\s*(ч\.?\s*л|чайная ложка|чайные ложки)", s)
+        if tea_match:
+            spoons = float(tea_match.group(1).replace(",", "."))
+            return spoons * 5, "inferred"
+        if "ложка" in s:
+            return 14, "inferred"
+
+    return float(item.get("default_g", 100)), "default"
+
+
+def _find_food_item_for_segment(segment: str) -> Optional[dict]:
+    s = normalize_food_text(segment)
+    best_item = None
+    best_score = 0
+
+    for item in FOOD_DATABASE:
+        score = 0
+        for alias in item["aliases"]:
+            alias_n = normalize_food_text(alias)
+            if re.search(rf"\b{re.escape(alias_n)}", s):
+                score = max(score, len(alias_n) + 10)
+            elif alias_n in s:
+                score = max(score, len(alias_n))
+        if score > best_score:
+            best_score = score
+            best_item = item
+
+    return best_item if best_score > 0 else None
 
 
 def estimate_meal_details(text: str) -> dict:
     normalized = normalize_food_text(text)
-    segments = [segment.strip() for segment in re.split(r",|\+|;| и | с ", normalized) if segment.strip()]
+    raw_segments = re.split(r",|;|\+|\n| и | с ", normalized)
+    segments = [segment.strip() for segment in raw_segments if segment.strip()]
+
     found_items = []
     seen_pairs = set()
+
     for segment in segments:
-        for item in FOOD_DATABASE:
-            if any(alias in segment for alias in item["aliases"]):
-                key = (segment, item["name"])
-                if key in seen_pairs:
-                    continue
-                seen_pairs.add(key)
-                grams = _extract_amount(segment, item)
-                ratio = grams / 100
-                found_items.append({
-                    "name": item["name"],
-                    "grams": round(grams),
-                    "kcal": round(item["kcal"] * ratio),
-                    "protein": round(item["p"] * ratio, 1),
-                    "fat": round(item["f"] * ratio, 1),
-                    "carbs": round(item["c"] * ratio, 1),
-                })
-                break
+        item = _find_food_item_for_segment(segment)
+        if not item:
+            continue
+
+        key = (segment, item["name"])
+        if key in seen_pairs:
+            continue
+        seen_pairs.add(key)
+
+        grams, source = _extract_amount_from_segment(segment, item)
+        ratio = grams / 100
+        found_items.append({
+            "name": item["name"],
+            "grams": round(grams),
+            "kcal": round(item["kcal"] * ratio),
+            "protein": round(item["p"] * ratio, 1),
+            "fat": round(item["f"] * ratio, 1),
+            "carbs": round(item["c"] * ratio, 1),
+            "source": source,
+        })
+
     if not found_items:
-        fallback = 250
-        if any(x in normalized for x in ["бургер", "пицца", "шаурма", "торт", "фастфуд"]):
-            fallback = 650
-        elif any(x in normalized for x in ["курица", "рыба", "индейка", "мясо", "яйца", "творог"]):
-            fallback = 350
-        elif any(x in normalized for x in ["рис", "гречка", "картофель", "макароны", "хлеб"]):
-            fallback = 320
-        return {"kcal": fallback, "protein": 0.0, "fat": 0.0, "carbs": 0.0, "items": [], "precision": "low"}
+        return {
+            "kcal": 0,
+            "protein": 0.0,
+            "fat": 0.0,
+            "carbs": 0.0,
+            "items": [],
+            "precision": "none",
+            "comment": "Не смог точно распознать продукты. Напиши так: 150 г курицы, 120 г риса, 100 г салата.",
+        }
+
+    exact_count = sum(1 for item in found_items if item["source"] == "exact")
+    inferred_count = sum(1 for item in found_items if item["source"] == "inferred")
+
+    if exact_count == len(found_items):
+        precision = "high"
+    elif exact_count > 0 or inferred_count > 0:
+        precision = "medium"
+    else:
+        precision = "low"
+
     return {
         "kcal": sum(item["kcal"] for item in found_items),
         "protein": round(sum(item["protein"] for item in found_items), 1),
         "fat": round(sum(item["fat"] for item in found_items), 1),
         "carbs": round(sum(item["carbs"] for item in found_items), 1),
         "items": found_items,
-        "precision": "high",
+        "precision": precision,
+        "comment": "",
     }
 
 
@@ -2045,7 +2165,7 @@ async def weight_history(message: Message) -> None:
 @dp.message(F.text == "🍴 Сегодня ел")
 async def start_meal_log(message: Message, state: FSMContext) -> None:
     await state.set_state(MealForm.text)
-    await message.answer("Напиши, что ты сегодня ел. Например: курица с рисом и салат")
+    await message.answer("Напиши, что ты сегодня ел. Например: 150 г курицы, 200 г риса и 100 г салата")
 
 
 @dp.message(MealForm.text)
@@ -2054,19 +2174,33 @@ async def save_meal(message: Message, state: FSMContext) -> None:
     if not text:
         await message.answer("Напиши, что ты ел.")
         return
+
     profile = get_user_profile(message.from_user.id)
     hits = forbidden_hits_in_text(text, profile)
     if hits:
         await state.clear()
         await message.answer(
             "Эта запись содержит продукт из твоих запретов, поэтому я не буду сохранять её в дневник.\n\n"
-            "Найден продукт из твоих запретов."
-            "\n\nЧтобы изменить запреты, нажми: 🚫 Мои запреты",
+            "Чтобы изменить запреты, нажми: 🚫 Мои запреты",
             reply_markup=main_menu(),
         )
         return
 
     details = estimate_meal_details(text)
+
+    if details["precision"] == "none":
+        await message.answer(
+            "Я не могу точно посчитать калории и БЖУ по такому описанию.\n\n"
+            "Напиши в формате:\n"
+            "• 150 г курицы\n"
+            "• 120 г риса\n"
+            "• 100 г салата\n"
+            "или\n"
+            "• 2 яйца\n"
+            "• 250 мл кефира"
+        )
+        return
+
     save_meal_log(
         message.from_user.id,
         text,
@@ -2076,20 +2210,28 @@ async def save_meal(message: Message, state: FSMContext) -> None:
         float(details["fat"]),
         float(details["carbs"]),
     )
+
     today_total = get_today_meal_kcal(message.from_user.id)
-    if details["items"]:
-        items_text = "\nРаспознано:\n" + "\n".join(
-            f"— {item['name']}: {item['grams']} г ≈ {item['kcal']} ккал" for item in details["items"]
-        )
+    items_text = "\n".join(
+        f"— {item['name']}: {item['grams']} г ≈ {item['kcal']} ккал | Б {item['protein']} / Ж {item['fat']} / У {item['carbs']}"
+        for item in details["items"]
+    )
+
+    if details["precision"] == "high":
+        precision_text = "✅ Точный расчёт по граммовкам"
+    elif details["precision"] == "medium":
+        precision_text = "⚠️ Частично точный расчёт: часть порций определена автоматически"
     else:
-        items_text = "\nНе нашёл точные граммовки, поэтому дал усреднённую оценку."
+        precision_text = "⚠️ Приблизительный расчёт"
+
     await state.clear()
     await message.answer(
+        f"{precision_text}\n\n"
         f"Записал: {text}\n"
-        f"Примерно: {details['kcal']} ккал\n"
-        f"БЖУ: {details['protein']} / {details['fat']} / {details['carbs']}\n"
-        f"Сегодня всего: {today_total} ккал"
-        f"{items_text}",
+        f"Калории: {details['kcal']} ккал\n"
+        f"БЖУ: {details['protein']} / {details['fat']} / {details['carbs']}\n\n"
+        f"Состав:\n{items_text}\n\n"
+        f"Сегодня всего: {today_total} ккал",
         reply_markup=main_menu(),
     )
 
