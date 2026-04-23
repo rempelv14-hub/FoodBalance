@@ -894,59 +894,59 @@ def activity_multiplier(activity_level: str) -> float:
 
 
 def calculate_bmr(age: int, sex: str, weight_kg: float, height_cm: int) -> int:
-    if sex == "Женский":
+    sex_value = str(sex).strip().lower()
+    if "жен" in sex_value:
         return int(10 * weight_kg + 6.25 * height_cm - 5 * age - 161)
     return int(10 * weight_kg + 6.25 * height_cm - 5 * age + 5)
 
 
 def calculate_targets(profile: dict) -> dict:
     age = int(profile["age"])
-    sex = str(profile["sex"])
+    sex = str(profile["sex"]).strip().lower()
     weight = float(profile["weight_kg"])
     height = int(profile["height_cm"])
-    goal = str(profile["goal"])
+    goal = str(profile["goal"]).strip().lower()
     activity = str(profile["activity_level"])
 
     bmr = calculate_bmr(age, sex, weight, height)
-    maintain = int(bmr * activity_multiplier(activity))
+    maintain = round(bmr * activity_multiplier(activity))
 
-    is_female = "жен" in sex.lower()
-    min_cut_calories = 1500 if is_female else 1700
-    min_fat = 50 if is_female else 55
+    is_female = "жен" in sex
 
-    if goal == "Безопасное снижение веса":
-        activity_value = activity.lower()
-        if "низ" in activity_value:
-            deficit_percent = 0.15
-        elif "выс" in activity_value:
-            deficit_percent = 0.18
-        else:
-            deficit_percent = 0.17
-
-        deficit = int(maintain * deficit_percent)
-        deficit = max(300, min(deficit, 700))
-        calories = maintain - deficit
-        calories = max(min_cut_calories, calories)
-
+    if "снижение" in goal:
+        calories = round(maintain * 0.88)
         protein = round(weight * 1.8)
-        fat = max(min_fat, round(weight * 0.9))
-    elif goal == "Набор массы":
-        calories = maintain + 250
+        fat = round(weight * 0.8)
+        min_calories = 1500 if is_female else 1700
+        min_fat = 50 if is_female else 60
+        min_carbs = max(120, round(weight * 1.6))
+    elif "набор" in goal:
+        calories = round(maintain * 1.10)
         protein = round(weight * 1.8)
-        fat = max(min_fat, round(weight * 1.0))
+        fat = round(weight * 0.9)
+        min_calories = 1800 if is_female else 2100
+        min_fat = 55 if is_female else 65
+        min_carbs = max(160, round(weight * 2.5))
     else:
         calories = maintain
         protein = round(weight * 1.6)
-        fat = max(min_fat, round(weight * 0.9))
+        fat = round(weight * 0.9)
+        min_calories = 1600 if is_female else 1900
+        min_fat = 50 if is_female else 60
+        min_carbs = max(140, round(weight * 2.0))
+
+    calories = max(min_calories, calories)
+    fat = max(min_fat, fat)
 
     carbs = round((calories - protein * 4 - fat * 9) / 4)
-    carbs = max(100, carbs)
 
-    if protein * 4 + fat * 9 + carbs * 4 > calories + 80:
-        carbs = max(100, round((calories - protein * 4 - fat * 9) / 4))
-        if carbs < 100:
-            carbs = 100
-            fat = max(min_fat, round((calories - protein * 4 - carbs * 4) / 9))
+    if carbs < min_carbs:
+        fat = max(min_fat, round((calories - protein * 4 - min_carbs * 4) / 9))
+        carbs = round((calories - protein * 4 - fat * 9) / 4)
+
+    if carbs < min_carbs:
+        carbs = min_carbs
+        calories = protein * 4 + fat * 9 + carbs * 4
 
     water = estimate_water_goal(profile)
     return {
@@ -1128,6 +1128,8 @@ def profile_summary(profile: dict) -> str:
     bmi_text = f"{bmi:.1f}" if bmi is not None else "—"
     reminder_status = "включены" if int(profile.get("reminder_enabled", 0)) else "выключены"
     reminder_time = f"{int(profile.get('reminder_hour', 14)):02d}:{int(profile.get('reminder_minute', 0)):02d}"
+    targets = calculate_targets(profile)
+
     return (
         "👤 Твой профиль\n\n"
         f"Имя: {profile['name']}\n"
@@ -1137,9 +1139,9 @@ def profile_summary(profile: dict) -> str:
         f"Вес: {profile['weight_kg']} кг\n\n"
         f"🎯 Цель: {profile['goal']}\n"
         f"⚡ Активность: {profile['activity_level']}\n"
-        f"🔥 Калории: {profile['calories_goal']} ккал\n"
-        f"🥩 БЖУ: {profile['protein_g']} / {profile['fat_g']} / {profile['carbs_g']}\n"
-        f"💧 Вода: {profile['water_goal_ml']} мл\n"
+        f"🔥 Калории: {targets['calories']} ккал\n"
+        f"🥩 БЖУ: {targets['protein']} / {targets['fat']} / {targets['carbs']}\n"
+        f"💧 Вода: {targets['water']} мл\n"
         f"🍽 Приёмов пищи: {profile['meals_per_day']}\n"
         f"⏰ Напоминания: {reminder_status} ({reminder_time})\n"
         f"📏 ИМТ: {bmi_text}\n"
@@ -1151,21 +1153,32 @@ def profile_summary(profile: dict) -> str:
 def build_targets_text(profile: Optional[dict], telegram_id: int) -> str:
     if not profile:
         return "Сначала заполни анкету, чтобы я мог рассчитать калории и БЖУ."
+
+    targets = calculate_targets(profile)
     today_kcal = get_today_meal_kcal(telegram_id)
     today_macros = get_today_meal_macros(telegram_id)
-    remain_kcal = max(0, int(profile['calories_goal']) - today_kcal)
+    today_water = get_today_water_ml(telegram_id)
+
+    remain_kcal = max(0, targets["calories"] - today_kcal)
+    remain_protein = max(0, round(targets["protein"] - today_macros["protein"], 1))
+    remain_fat = max(0, round(targets["fat"] - today_macros["fat"], 1))
+    remain_carbs = max(0, round(targets["carbs"] - today_macros["carbs"], 1))
+
     return (
         "🔥 Твой баланс на сегодня\n\n"
-        f"🎯 Цель: {profile['calories_goal']} ккал\n"
-        f"🥩 Белки: {profile['protein_g']} г\n"
-        f"🥑 Жиры: {profile['fat_g']} г\n"
-        f"🍚 Углеводы: {profile['carbs_g']} г\n"
-        f"💧 Норма воды: {profile['water_goal_ml']} мл\n"
-        f"💦 Выпито воды: {get_today_water_ml(telegram_id)} мл\n\n"
+        f"⚙️ Базовый обмен: {targets['bmr']} ккал\n"
+        f"🔋 Поддержание: {targets['maintain']} ккал\n"
+        f"🎯 Цель: {targets['calories']} ккал\n\n"
+        f"🥩 Белки: {targets['protein']} г\n"
+        f"🥑 Жиры: {targets['fat']} г\n"
+        f"🍚 Углеводы: {targets['carbs']} г\n"
+        f"💧 Норма воды: {targets['water']} мл\n\n"
         f"📌 Уже съедено: {today_kcal} ккал\n"
         f"📊 Сегодня по БЖУ: {today_macros['protein']} / {today_macros['fat']} / {today_macros['carbs']}\n"
-        f"✅ Осталось до цели: {remain_kcal} ккал\n\n"
-        "Это ориентировочные расчёты, а не медицинский план."
+        f"💦 Выпито воды: {today_water} мл\n\n"
+        f"✅ Осталось калорий: {remain_kcal} ккал\n"
+        f"✅ Осталось БЖУ: {remain_protein} / {remain_fat} / {remain_carbs}\n\n"
+        "Это ориентировочный расчёт по анкете, не медицинский диагноз."
     )
 
 def build_day_plan(profile: Optional[dict]) -> str:
